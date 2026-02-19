@@ -1,1 +1,3 @@
-console.log('This is a popup!');
+document.getElementById("record").addEventListener("click", async () => {
+    await chrome.runtime.sendMessage({ type: "START_RECORDING" });
+});

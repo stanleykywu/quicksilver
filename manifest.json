@@ -1,10 +1,26 @@
 {
-  "name": "Hello Extensions",
-  "description": "Base Level Extension",
+  "name": "Tab Audio Recorder",
   "version": "1.0",
   "manifest_version": 3,
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
-    "default_popup": "hello.html",
-    "default_icon": "hello_extensions.png"
-  }
+    "default_popup": "popup.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "processor.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }
