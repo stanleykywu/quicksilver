@@ -1,9 +1,10 @@
 let recording = false;
+let recordingResetTimeout;
 
 chrome.runtime.onMessage.addListener(async (msg) => {
     if (msg.type === "START_RECORDING" && !recording) {
         recording = true;
-
+        clearRecordingReset();
         const existing = await chrome.offscreen.hasDocument?.();
         if (!existing) {
             await chrome.offscreen.createDocument({
@@ -26,6 +27,19 @@ chrome.runtime.onMessage.addListener(async (msg) => {
         });
 
         // Reset flag after the recording duration (30s + buffer)
-        setTimeout(() => { recording = false; }, 31000);
+        recordingResetTimeout = setTimeout(() => { recording = false; }, 31000);
+    } 
+    else if (msg.type === "RECORDING_FINISHED") {
+        recording = false;
+        clearRecordingReset();
     }
 });
+
+function clearRecordingReset() {
+    // If we stop recording prematurely, we should cancel this operation
+    // because we manually set recording to false already.
+    if (recordingResetTimeout) {
+        clearTimeout(recordingResetTimeout);
+        recordingResetTimeout = undefined;
+    }
+}

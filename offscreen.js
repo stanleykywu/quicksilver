@@ -4,6 +4,9 @@ let workletNode;
 let pcmData = [];
 let currentStream;
 let recordedSampleRate; // Store the actual rate
+let stopTimeoutId;
+let stopping = false;
+let monitorGain;
 
 chrome.runtime.onMessage.addListener(async (msg) => {
     if (msg.type === "CAPTURE_STREAM") {
@@ -18,6 +21,10 @@ chrome.runtime.onMessage.addListener(async (msg) => {
         });
         startRecording(currentStream);
     }
+
+    if (msg.type === "STOP_RECORDING") {
+        stopRecording(msg.reason || "cancelled");
+    }
 });
 
 async function startRecording(stream) {
@@ -28,6 +35,13 @@ async function startRecording(stream) {
     await audioContext.audioWorklet.addModule('processor.js');
 
     source = audioContext.createMediaStreamSource(stream);
+
+    // Keep audio audible in the tab by routing it
+    // through the offscreen context to the output
+    monitorGain = audioContext.createGain();
+    monitorGain.gain.value = 1;
+    source.connect(monitorGain);
+    monitorGain.connect(audioContext.destination);
 
     workletNode = new AudioWorkletNode(audioContext, 'pcm-processor', {
         outputChannelCount: [2]
@@ -40,14 +54,37 @@ async function startRecording(stream) {
     source.connect(workletNode);
     workletNode.connect(audioContext.destination);
 
-    setTimeout(stopRecording, 30000);
+    stopTimeoutId = setTimeout(() => stopRecording("timeout"), 30000);
 }
 
-async function stopRecording() {
-    if (!workletNode) return;
+async function stopRecording(reason = "finished") {
+    if (stopping) return; // If we're already stopping, don't run this again.
+    stopping = true;
 
-    workletNode.disconnect();
-    source.disconnect();
+    if (stopTimeoutId) {
+        clearTimeout(stopTimeoutId);
+        stopTimeoutId = undefined;
+    }
+
+    // Regardless of the reason, we always sent a "RECORDING_FINISHED"
+    // message to background.js at the end, so it can clean up.
+    if (!workletNode && !currentStream && !audioContext) {
+        stopping = false; // Because we finished stopping (i.e., did nothing)
+        chrome.runtime.sendMessage({ type: "RECORDING_FINISHED", reason });
+        return;
+    }
+
+    if (workletNode) {
+        workletNode.disconnect();
+    }
+
+    if (source) {
+        source.disconnect();
+    }
+
+    if (monitorGain) {
+        monitorGain.disconnect();
+    }
 
     if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
@@ -58,13 +95,21 @@ async function stopRecording() {
     }
 
     const flattened = flattenPCM(pcmData);
-    if (flattened.length > 0) {
+    if (flattened.length > 0 && (reason === "finished" || reason === "timeout")) {
         // Use the rate we captured at the start
         downloadWav(flattened, recordedSampleRate);
     }
 
     pcmData = [];
-    chrome.runtime.sendMessage({ type: "RECORDING_FINISHED" });
+    workletNode = undefined;
+    source = undefined;
+    monitorGain = undefined;
+    audioContext = undefined;
+    currentStream = undefined;
+    recordedSampleRate = undefined;
+    stopping = false;
+
+    chrome.runtime.sendMessage({ type: "RECORDING_FINISHED", reason });
 }
 
 function flattenPCM(chunks) {
