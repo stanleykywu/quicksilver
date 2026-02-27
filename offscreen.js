@@ -7,6 +7,19 @@ let recordedSampleRate; // Store the actual rate
 let stopTimeoutId;
 let stopping = false;
 let monitorGain;
+let averagePcm32Wasm; // function exported from WASM module
+
+const wasmReady = initWasm();
+
+async function initWasm() {
+    try {
+        const wasmModule = await import('./pkg/ai_music_browser_detector.js');
+        await wasmModule.default();
+        averagePcm32Wasm = wasmModule.average_pcm32;
+    } catch (err) {
+        console.error('Failed to initialize WASM module', err);
+    }
+}
 
 chrome.runtime.onMessage.addListener(async (msg) => {
     if (msg.type === "CAPTURE_STREAM") {
@@ -94,7 +107,13 @@ async function stopRecording(reason = "finished") {
         await audioContext.close();
     }
 
+    await wasmReady;
     const flattened = flattenPCM(pcmData);
+    if (averagePcm32Wasm && flattened.length > 0) {
+        const average = averagePcm32Wasm(flattened);
+        console.log("WASM average PCM32:", average);
+    }
+
     if (flattened.length > 0 && (reason === "finished" || reason === "timeout")) {
         // Use the rate we captured at the start
         downloadWav(flattened, recordedSampleRate);
