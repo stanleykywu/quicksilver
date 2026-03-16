@@ -7,7 +7,7 @@ let recordedSampleRate; // Store the actual rate
 let stopTimeoutId;
 let stopping = false;
 let monitorGain;
-let averagePcm32Wasm; // function exported from WASM module
+let detector; // function exported from WASM module
 
 const wasmReady = initWasm();
 
@@ -15,7 +15,7 @@ async function initWasm() {
     try {
         const wasmModule = await import('./pkg/ai_music_browser_detector.js');
         await wasmModule.default();
-        averagePcm32Wasm = wasmModule.average_pcm32;
+        detector = wasmModule.run_inference;
     } catch (err) {
         console.error('Failed to initialize WASM module', err);
     }
@@ -109,14 +109,18 @@ async function stopRecording(reason = "finished") {
 
     await wasmReady;
     const flattened = flattenPCM(pcmData);
-    if (averagePcm32Wasm && flattened.length > 0) {
-        const average = averagePcm32Wasm(flattened);
-        console.log("WASM average PCM32:", average);
-    }
+    if (detector && flattened.length > 0 && (reason === "finished" || reason === "timeout")) {
 
-    if (flattened.length > 0 && (reason === "finished" || reason === "timeout")) {
-        // Use the rate we captured at the start
-        downloadWav(flattened, recordedSampleRate);
+        try {
+            const result = detector(flattened);
+            console.log("WASM detection result:", result);
+        } catch (err) {
+            console.error("WASM inference failed", {
+                error: err instanceof Error ? err.message : String(err),
+                flattenedLength: flattened.length,
+                reason
+            });
+        }
     }
 
     pcmData = [];
@@ -140,46 +144,4 @@ function flattenPCM(chunks) {
         offset += chunk.length;
     }
     return result;
-}
-
-function downloadWav(floats, sampleRate) {
-    const buffer = new ArrayBuffer(44 + floats.length * 2);
-    const view = new DataView(buffer);
-
-    writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + floats.length * 2, true);
-    writeString(view, 8, 'WAVE');
-    writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 2, true);
-
-    // This is the critical part: The header must match the actual samples
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 4, true); // ByteRate: Rate * NumChannels * BytesPerSample
-
-    view.setUint16(32, 4, true);
-    view.setUint16(34, 16, true);
-    writeString(view, 36, 'data');
-    view.setUint32(40, floats.length * 2, true);
-
-    let index = 44;
-    for (let i = 0; i < floats.length; i++) {
-        let s = Math.max(-1, Math.min(1, floats[i]));
-        view.setInt16(index, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-        index += 2;
-    }
-
-    const blob = new Blob([view], { type: 'audio/wav' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `tab-audio-${sampleRate}hz.wav`;
-    a.click();
-}
-
-function writeString(view, offset, string) {
-    for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-    }
 }
