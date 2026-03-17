@@ -7,9 +7,9 @@ use pyo3::prelude::*;
 /// Python bindings for the `compute_fakeprint` function.
 /// `pcm_audio` is a 1D array of audio samples in the range [-1.0, 1.0].
 /// `input_sample_rate` is the sample rate of the input audio.
-/// `output_sample_rate` is the desired sample rate for the output fakeprint. 
+/// `output_sample_rate` is the desired sample rate for the output fakeprint.
 /// If None, it defaults to 44.1 kHz.
-/// `f_range` is a tuple of (min_freq, max_freq) to specify the frequency range for the fakeprint. 
+/// `f_range` is a tuple of (min_freq, max_freq) to specify the frequency range for the fakeprint.
 /// If None, it defaults to (5000, 16000) Hz.
 fn py_compute_fakeprint(
     pcm_audio: Vec<f32>,
@@ -29,9 +29,9 @@ fn py_compute_fakeprint(
 /// Python bindings for a 2D version of the `compute_fakeprint` function.
 /// `audio_2d` is a 2D array of shape [time, channels] containing audio samples in the range [-1.0, 1.0].
 /// `input_sample_rate` is the sample rate of the input audio.
-/// `output_sample_rate` is the desired sample rate for the output fakeprint. 
+/// `output_sample_rate` is the desired sample rate for the output fakeprint.
 /// If None, it defaults to 44.1 kHz.
-/// `f_range` is a tuple of (min_freq, max_freq) to specify the frequency range for the fakeprint. 
+/// `f_range` is a tuple of (min_freq, max_freq) to specify the frequency range for the fakeprint.
 /// If None, it defaults to (5000, 16000) Hz.
 fn py_compute_fakeprint_2d(
     audio_2d: Vec<Vec<f32>>, // shape: [time, channels]

@@ -73,7 +73,8 @@ pub fn resample_audio(audio_slice: &Array2<f32>, input_rate: u32, output_rate: u
         let (nbr_in, nbr_out) = resampler
             .process_into_buffer(&input_slices, &mut outbuffer, None)
             .expect("Failed to resample audio");
-        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter()) {
+        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter())
+        {
             resampled_channel.extend_from_slice(&out_channel[..nbr_out]);
         }
         for input_channel in &mut input_slices {
@@ -85,7 +86,8 @@ pub fn resample_audio(audio_slice: &Array2<f32>, input_rate: u32, output_rate: u
         let (_nbr_in, nbr_out) = resampler
             .process_partial_into_buffer(Some(&input_slices), &mut outbuffer, None)
             .expect("Failed to resample final audio chunk");
-        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter()) {
+        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter())
+        {
             resampled_channel.extend_from_slice(&out_channel[..nbr_out]);
         }
     }
@@ -100,7 +102,8 @@ pub fn resample_audio(audio_slice: &Array2<f32>, input_rate: u32, output_rate: u
         if nbr_out == 0 {
             break;
         }
-        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter()) {
+        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter())
+        {
             resampled_channel.extend_from_slice(&out_channel[..nbr_out]);
         }
     }
