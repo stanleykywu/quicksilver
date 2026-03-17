@@ -5,7 +5,6 @@ use crate::core::fakeprint::NUM_CHANNELS;
 
 pub const N_FFT: usize = 1 << 14;
 
-// TODO: add unit tests for stft
 
 /// Get Hann window coefficients for a given window size.
 fn hann_window(n: usize) -> Vec<f32> {
