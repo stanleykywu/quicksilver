@@ -8,13 +8,8 @@ mod tests {
 
     #[test]
     fn compute_fakeprint() {
-        // skip test if the file doesn't exist
-        if !std::path::Path::new("tests/test1-48000hz.wav").exists() {
-            eprintln!("Skipping test_compute_fakeprint since test WAV file doesn't exist");
-            return;
-        }
         let mut reader =
-            hound::WavReader::open("tests/test1-48000hz.wav").expect("Failed to open WAV file");
+            hound::WavReader::open("tests/assets/tom_scott.wav").expect("Failed to open WAV file");
         let spec = reader.spec();
         let samples = reader
             .samples::<i16>()

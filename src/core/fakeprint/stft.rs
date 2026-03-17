@@ -78,3 +78,83 @@ pub fn get_stft(audio_slice: &Array2<f32>) -> Array3<f32> {
     }
     stft
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::fakeprint::open_audio_slice;
+    use hound;
+    use scirs2_core::ndarray::{Array2, s};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    struct STFTResult {
+        output_shape: Vec<usize>,
+        output: Vec<Vec<Vec<f32>>>,
+    }
+
+    fn test_stft(audio_slice: &Array2<f32>, expected: &STFTResult) {
+        let stft = get_stft(&audio_slice);
+        let result = STFTResult {
+            output_shape: stft.shape().to_vec(),
+            output: stft
+                .outer_iter()
+                .map(|ch| ch.outer_iter().map(|bin| bin.to_vec()).collect())
+                .collect(),
+        };
+        assert_eq!(result.output_shape, expected.output_shape);
+        let mut tot_rel_err = 0.0;
+        for (res_bin, exp_bin) in result.output.iter().zip(expected.output.iter()) {
+            for (res_frame, exp_frame) in res_bin.iter().zip(exp_bin.iter()) {
+                for (res_val, exp_val) in res_frame.iter().zip(exp_frame.iter()) {
+                    tot_rel_err += (res_val - exp_val).abs() / exp_val.abs().max(1e-10);
+                }
+            }
+        }
+        let avg_err = tot_rel_err / (result.output_shape.iter().product::<usize>() as f32);
+        assert!(avg_err < 1e-3, "Mean relative error too high: {}", avg_err);
+    }
+
+    #[test]
+    fn test_stft1() {
+        let mut reader =
+            hound::WavReader::open("tests/assets/tom_scott.wav").expect("Failed to open WAV file");
+        let spec = reader.spec();
+        let samples = reader
+            .samples::<i16>()
+            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+            .collect::<Vec<f32>>();
+        let slice_end = spec.sample_rate as usize * 2;
+        // get only first 2 seconds
+        let audio_slice = open_audio_slice(&samples)
+            .slice(s![..slice_end, ..])
+            .to_owned();
+
+        let expected =
+            serde_json::from_str::<STFTResult>(include_str!("../../../tests/keys/stft1.json"))
+                .expect("Failed to deserialize expected STFT result");
+        test_stft(&audio_slice, &expected);
+    }
+
+    #[test]
+    fn test_stft2() {
+        let mut reader =
+            hound::WavReader::open("tests/assets/tom_scott.wav").expect("Failed to open WAV file");
+        let spec = reader.spec();
+        let samples = reader
+            .samples::<i16>()
+            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+            .collect::<Vec<f32>>();
+        let slice_begin = spec.sample_rate as usize * 10;
+        let slice_end = spec.sample_rate as usize * 11;
+        // get only first 2 seconds
+        let audio_slice = open_audio_slice(&samples)
+            .slice(s![slice_begin..slice_end, ..])
+            .to_owned();
+
+        let expected =
+            serde_json::from_str::<STFTResult>(include_str!("../../../tests/keys/stft2.json"))
+                .expect("Failed to deserialize expected STFT result");
+        test_stft(&audio_slice, &expected);
+    }
+}

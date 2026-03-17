@@ -17,6 +17,7 @@ dependencies = [
  "scirs2-interpolate",
  "serde",
  "serde_cbor",
+ "serde_json",
  "uuid",
  "wasm-bindgen",
 ]

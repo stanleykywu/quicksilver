@@ -117,10 +117,10 @@ pub fn resample_audio(audio_slice: &Array2<f32>, input_rate: u32, output_rate: u
     .reversed_axes() // return shape [time, channels]
 }
 
-/// Compute the spectrogram of the given PCM audio data, 
+/// Compute the spectrogram of the given PCM audio data,
 /// resampling if necessary, and only using the first `DURATION` seconds of audio for computation.
-/// The output is a 3d array of shape [channels, frequency_bins, time_frames] in decibels. 
-/// If output_sample_rate is None, it defaults to 44.1 kHz. 
+/// The output is a 3d array of shape [channels, frequency_bins, time_frames] in decibels.
+/// If output_sample_rate is None, it defaults to 44.1 kHz.
 /// If max_duration is None, it defaults to 30 seconds.
 pub fn spectrogram(
     pcm_audio: &[f32],
@@ -148,7 +148,7 @@ pub fn spectrogram(
 }
 
 /// Apply max normalization to the input array, with an optional maximum dB floor.
-/// If max_db is None, then it defaults to 5 dB. 
+/// If max_db is None, then it defaults to 5 dB.
 pub fn max_normalize(x: &Array1<f32>, max_db: Option<f32>) -> Array1<f32> {
     let max_db = max_db.unwrap_or(NORMALIZE_MAX_DB);
     let x = x.clamp(0.0, max_db);
@@ -156,9 +156,9 @@ pub fn max_normalize(x: &Array1<f32>, max_db: Option<f32>) -> Array1<f32> {
     x / (1e-6 + max_val)
 }
 
-/// Given the spectrogram, compute the fakeprint by averaging across time and channels, 
+/// Given the spectrogram, compute the fakeprint by averaging across time and channels,
 /// then applying a curve profile and max normalization.
-/// If f_range is not provided, it defaults to (5000, 16000) Hz. 
+/// If f_range is not provided, it defaults to (5000, 16000) Hz.
 /// If sample_rate is not provided, it defaults to 44.1 kHz.
 pub fn fakeprint(
     stft: &Array3<f32>,
@@ -186,7 +186,7 @@ pub fn fakeprint(
 
 /// Runs the fakeprint computation end to end,
 /// taking in raw PCM audio data and returning the fakeprint feature vector.
-/// The input PCM audio should be in the range [-1.0, 1.0] and can be of any sample rate, 
+/// The input PCM audio should be in the range [-1.0, 1.0] and can be of any sample rate,
 /// but it will be resampled to 44.1 kHz (or whatever the value of output_sample_rate is) for processing.
 /// f_range can be used to specify the frequency range for the fakeprint, and it defaults to (5000, 16000) Hz.
 pub fn compute_fakeprint(
@@ -279,12 +279,7 @@ mod tests {
 
     #[test]
     fn check_reconstruction1() {
-        // skip test if the file doesn't exist
-        if !std::path::Path::new("tests/test1-48000hz.wav").exists() {
-            eprintln!("Skipping test_check_reconstruction1 since test WAV file doesn't exist");
-            return;
-        }
-        let (orig_samples, recon_samples) = test_wav("tests/test1-48000hz.wav").unwrap();
+        let (orig_samples, recon_samples) = test_wav("tests/assets/tom_scott.wav").unwrap();
         assert_eq!(recon_samples.len(), orig_samples.len());
         for (recon, orig) in recon_samples.iter().zip(orig_samples.iter()) {
             assert!(
@@ -296,18 +291,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_e2e_no_errors() {
-        let pcm_audio = vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5]; // 3 samples of stereo audio
-        // repeat N_FFT times to ensure we have enough samples for the spectrogram
-        let pcm_audio = pcm_audio
-            .into_iter()
-            .cycle()
-            .take(2 * NUM_CHANNELS * N_FFT)
-            .collect::<Vec<f32>>();
-        let fakeprint = compute_fakeprint(&pcm_audio, 44100, None, None);
-        assert_eq!(fakeprint.len(), 4087); // should have 4087 frequency bins for N_FFT=16384
-    }
     #[test]
     fn test_max_normalize1() {
         let x = Array1::from_vec(vec![0.0, 1.0, 2.0, 3.0, 4.0]);
@@ -337,4 +320,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_e2e_no_errors() {
+        let pcm_audio = vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5]; // 3 samples of stereo audio
+        // repeat N_FFT times to ensure we have enough samples for the spectrogram
+        let pcm_audio = pcm_audio
+            .into_iter()
+            .cycle()
+            .take(2 * NUM_CHANNELS * N_FFT)
+            .collect::<Vec<f32>>();
+        let fakeprint = compute_fakeprint(&pcm_audio, 44100, None, None);
+        assert_eq!(fakeprint.len(), 4087); // should have 4087 frequency bins for N_FFT=16384
+    }
 }
