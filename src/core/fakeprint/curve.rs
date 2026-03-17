@@ -3,6 +3,7 @@ use scirs2_core::{
     ndarray::{Array1, s},
 };
 use scirs2_interpolate::{CubicSpline, SplineBoundaryCondition};
+// TODO: add unit tests for each function
 
 const DEFAULT_AREA: usize = 10;
 const LOWER_HULL_FLOOR_DB: f32 = -45.0;

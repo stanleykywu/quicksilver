@@ -1,5 +1,8 @@
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    calculate_cutoff,
+};
 use scirs2_core::ndarray::{Array1, Array2, Array3, s};
-use scirs2_signal::resampling::resample;
 
 mod stft;
 #[allow(unused_imports)]
@@ -7,7 +10,7 @@ use stft::{N_FFT, get_stft};
 mod curve;
 use curve::{DEFAULT_F_RANGE, curve_profile};
 
-// TODO: save audio slice as a wav to confirm it's the right audio, create e2e test with browser extension
+// TODO: add unit tests for max_normalize, spectrogram, and fakeprint functions.
 
 const NUM_CHANNELS: usize = 2;
 const DEFAULT_SAMPLE_RATE: u32 = 44100; // hz
@@ -37,28 +40,77 @@ pub fn resample_audio(audio_slice: &Array2<f32>, input_rate: u32, output_rate: u
         return audio_slice.clone();
     }
 
-    let mut resampled_channels = Vec::with_capacity(NUM_CHANNELS);
-    let audio_slice_t = audio_slice.t(); // transpose to shape [channels, time]
-    for channel in audio_slice_t.outer_iter() {
-        // resample() expects f64 input, so we need to upcast the audio data before resampling
-        let upcasted_channel: Vec<f64> = channel.iter().map(|&x| x as f64).collect();
-        let resampled_channel: Vec<f32> = resample(
-            &upcasted_channel,
-            input_rate as f64,
-            output_rate as f64,
-            None,
-        )
-        .expect("Failed to resample audio")
-        .iter()
-        .map(|&x| x as f32)
-        .collect();
-        resampled_channels.push(resampled_channel);
+    let n_samples = audio_slice.shape()[0];
+    let mut channels = Vec::with_capacity(NUM_CHANNELS);
+    for ch in 0..NUM_CHANNELS {
+        channels.push(audio_slice.column(ch).to_vec());
     }
-    let n_samples = resampled_channels[0].len();
+
+    let chunk_size = n_samples.clamp(1, 2048);
+    let sinc_len = 128;
+    let window = WindowFunction::Blackman2;
+    let params = SincInterpolationParameters {
+        sinc_len,
+        f_cutoff: calculate_cutoff(sinc_len, window),
+        interpolation: SincInterpolationType::Quadratic,
+        oversampling_factor: 256,
+        window,
+    };
+    let mut resampler = SincFixedIn::<f32>::new(
+        output_rate as f64 / input_rate as f64,
+        1.1,
+        params,
+        chunk_size,
+        NUM_CHANNELS,
+    )
+    .expect("Failed to initialize rubato resampler");
+    let resampler_delay = resampler.output_delay();
+    let mut outbuffer = vec![vec![0.0f32; resampler.output_frames_max()]; NUM_CHANNELS];
+    let mut resampled_channels = vec![Vec::new(); NUM_CHANNELS];
+    let mut input_slices: Vec<&[f32]> = channels.iter().map(|channel| channel.as_slice()).collect();
+
+    while input_slices[0].len() >= resampler.input_frames_next() {
+        let (nbr_in, nbr_out) = resampler
+            .process_into_buffer(&input_slices, &mut outbuffer, None)
+            .expect("Failed to resample audio");
+        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter()) {
+            resampled_channel.extend_from_slice(&out_channel[..nbr_out]);
+        }
+        for input_channel in &mut input_slices {
+            *input_channel = &input_channel[nbr_in..];
+        }
+    }
+
+    if !input_slices[0].is_empty() {
+        let (_nbr_in, nbr_out) = resampler
+            .process_partial_into_buffer(Some(&input_slices), &mut outbuffer, None)
+            .expect("Failed to resample final audio chunk");
+        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter()) {
+            resampled_channel.extend_from_slice(&out_channel[..nbr_out]);
+        }
+    }
+
+    let expected_output_frames =
+        ((n_samples as u64 * output_rate as u64) + (input_rate as u64 / 2)) / input_rate as u64;
+    let n_samples = expected_output_frames as usize;
+    while resampled_channels[0].len() < resampler_delay + n_samples {
+        let (_nbr_in, nbr_out) = resampler
+            .process_partial_into_buffer::<Vec<f32>, Vec<f32>>(None, &mut outbuffer, None)
+            .expect("Failed to flush resampler delay");
+        if nbr_out == 0 {
+            break;
+        }
+        for (resampled_channel, out_channel) in resampled_channels.iter_mut().zip(outbuffer.iter()) {
+            resampled_channel.extend_from_slice(&out_channel[..nbr_out]);
+        }
+    }
     // convert back to 2d array
     Array2::from_shape_vec(
         (NUM_CHANNELS, n_samples),
-        resampled_channels.into_iter().flatten().collect(),
+        resampled_channels
+            .into_iter()
+            .flat_map(|channel| channel.into_iter().skip(resampler_delay).take(n_samples))
+            .collect(),
     )
     .expect("Failed to convert resampled audio to 2D array")
     .reversed_axes() // return shape [time, channels]
@@ -228,18 +280,38 @@ mod tests {
     }
 
     #[test]
-    fn test_downsampling() {
-        let pcm_audio = vec![0.0, 0.1, 0.2, 0.3]; // 2 samples of stereo audio
-        let audio_slice = open_audio_slice(&pcm_audio);
-        let resampled = resample_audio(&audio_slice, 44100, 22050);
-        assert_eq!(resampled.shape(), &[1, 2]); // should have 1 sample after downsampling
-    }
-    #[test]
-    fn test_upsampling() {
-        let pcm_audio = vec![0.0, 0.1, 0.2, 0.3]; // 2 samples of stereo audio
-        let audio_slice = open_audio_slice(&pcm_audio);
-        let resampled = resample_audio(&audio_slice, 22050, 44100);
-        assert_eq!(resampled.shape(), &[4, 2]); // should have 4 samples after upsampling
+    fn test_full_resample() {
+        let mut reader =
+            hound::WavReader::open("tests/test1-48000hz.wav").expect("Failed to open WAV file");
+        let spec = reader.spec();
+        let samples = reader
+            .samples::<i16>()
+            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+            .collect::<Vec<f32>>();
+        let audio_slice = open_audio_slice(&samples);
+        let resampled = resample_audio(&audio_slice, spec.sample_rate, 44100);
+        assert_eq!(resampled.shape()[1], NUM_CHANNELS); // should have the same number of channels
+        let expected = (samples.len() / NUM_CHANNELS) * 44100 / spec.sample_rate as usize;
+        assert!((resampled.shape()[0] as isize - expected as isize).abs() <= 1);
+
+        // save resampled audio to a wav file for manual inspection
+        let temp_file = "tests/test1-44100hz.wav";
+        let new_spec = hound::WavSpec {
+            channels: NUM_CHANNELS as u16,
+            sample_rate: 44100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer =
+            hound::WavWriter::create(temp_file, new_spec).expect("Failed to create WAV writer");
+        for frame in resampled.rows() {
+            for &sample in frame {
+                let s = sample.clamp(-1.0, 1.0);
+                let pcm = (s * 32767.0) as i16;
+                writer.write_sample(pcm).expect("Failed to write sample");
+            }
+        }
+        writer.finalize().expect("Failed to finalize WAV file");
     }
 
     #[test]
