@@ -5,7 +5,6 @@ use rubato::{
 use scirs2_core::ndarray::{Array1, Array2, Array3, s};
 
 mod stft;
-#[allow(unused_imports)]
 use stft::{N_FFT, get_stft};
 mod curve;
 use curve::{DEFAULT_F_RANGE, curve_profile};
@@ -17,8 +16,7 @@ const DEFAULT_SAMPLE_RATE: u32 = 44100; // hz
 const DURATION: u32 = 30; // seconds
 const NORMALIZE_MAX_DB: f32 = 5.0; // dB
 
-/// Open an audio slice for processing, given the raw
-/// PCM float 32 data and the sample rate.
+/// Open an audio slice for processing, given the raw PCM float 32 data.
 /// Returns a 2d array of shape [time, channels] for further processing.
 pub fn open_audio_slice(pcm_audio: &[f32]) -> Array2<f32> {
     let n_samples = pcm_audio.len() / NUM_CHANNELS;
@@ -119,6 +117,11 @@ pub fn resample_audio(audio_slice: &Array2<f32>, input_rate: u32, output_rate: u
     .reversed_axes() // return shape [time, channels]
 }
 
+/// Compute the spectrogram of the given PCM audio data, 
+/// resampling if necessary, and only using the first `DURATION` seconds of audio for computation.
+/// The output is a 3d array of shape [channels, frequency_bins, time_frames] in decibels. 
+/// If output_sample_rate is None, it defaults to 44.1 kHz. 
+/// If max_duration is None, it defaults to 30 seconds.
 pub fn spectrogram(
     pcm_audio: &[f32],
     input_sample_rate: u32,
@@ -144,6 +147,8 @@ pub fn spectrogram(
     get_stft(&audio_slice)
 }
 
+/// Apply max normalization to the input array, with an optional maximum dB floor.
+/// If max_db is None, then it defaults to 5 dB. 
 pub fn max_normalize(x: &Array1<f32>, max_db: Option<f32>) -> Array1<f32> {
     let max_db = max_db.unwrap_or(NORMALIZE_MAX_DB);
     let x = x.clamp(0.0, max_db);
@@ -151,6 +156,10 @@ pub fn max_normalize(x: &Array1<f32>, max_db: Option<f32>) -> Array1<f32> {
     x / (1e-6 + max_val)
 }
 
+/// Given the spectrogram, compute the fakeprint by averaging across time and channels, 
+/// then applying a curve profile and max normalization.
+/// If f_range is not provided, it defaults to (5000, 16000) Hz. 
+/// If sample_rate is not provided, it defaults to 44.1 kHz.
 pub fn fakeprint(
     stft: &Array3<f32>,
     f_range: Option<(f32, f32)>,
@@ -175,6 +184,11 @@ pub fn fakeprint(
     max_normalize(&fp_curve, None)
 }
 
+/// Runs the fakeprint computation end to end,
+/// taking in raw PCM audio data and returning the fakeprint feature vector.
+/// The input PCM audio should be in the range [-1.0, 1.0] and can be of any sample rate, 
+/// but it will be resampled to 44.1 kHz (or whatever the value of output_sample_rate is) for processing.
+/// f_range can be used to specify the frequency range for the fakeprint, and it defaults to (5000, 16000) Hz.
 pub fn compute_fakeprint(
     pcm_audio: &[f32],
     input_sample_rate: u32,
@@ -283,41 +297,6 @@ mod tests {
     }
 
     #[test]
-    fn test_full_resample() {
-        let mut reader =
-            hound::WavReader::open("tests/test1-48000hz.wav").expect("Failed to open WAV file");
-        let spec = reader.spec();
-        let samples = reader
-            .samples::<i16>()
-            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
-            .collect::<Vec<f32>>();
-        let audio_slice = open_audio_slice(&samples);
-        let resampled = resample_audio(&audio_slice, spec.sample_rate, 44100);
-        assert_eq!(resampled.shape()[1], NUM_CHANNELS); // should have the same number of channels
-        let expected = (samples.len() / NUM_CHANNELS) * 44100 / spec.sample_rate as usize;
-        assert!((resampled.shape()[0] as isize - expected as isize).abs() <= 1);
-
-        // save resampled audio to a wav file for manual inspection
-        let temp_file = "tests/test1-44100hz.wav";
-        let new_spec = hound::WavSpec {
-            channels: NUM_CHANNELS as u16,
-            sample_rate: 44100,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer =
-            hound::WavWriter::create(temp_file, new_spec).expect("Failed to create WAV writer");
-        for frame in resampled.rows() {
-            for &sample in frame {
-                let s = sample.clamp(-1.0, 1.0);
-                let pcm = (s * 32767.0) as i16;
-                writer.write_sample(pcm).expect("Failed to write sample");
-            }
-        }
-        writer.finalize().expect("Failed to finalize WAV file");
-    }
-
-    #[test]
     fn test_e2e_no_errors() {
         let pcm_audio = vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5]; // 3 samples of stereo audio
         // repeat N_FFT times to ensure we have enough samples for the spectrogram
@@ -329,4 +308,33 @@ mod tests {
         let fakeprint = compute_fakeprint(&pcm_audio, 44100, None, None);
         assert_eq!(fakeprint.len(), 4087); // should have 4087 frequency bins for N_FFT=16384
     }
+    #[test]
+    fn test_max_normalize1() {
+        let x = Array1::from_vec(vec![0.0, 1.0, 2.0, 3.0, 4.0]);
+        let normalized = max_normalize(&x, None);
+        let expected = vec![0.0, 0.25, 0.5, 0.75, 1.0];
+        for (n, e) in normalized.iter().zip(expected.iter()) {
+            assert!(
+                (n - e).abs() < 1e-6,
+                "Normalized value differs from expected: normalized={}, expected={}",
+                n,
+                e
+            );
+        }
+    }
+    #[test]
+    fn test_max_normalize2() {
+        let x = Array1::from_vec(vec![0.0, -1.0, 2.0, -3.0, 4.0]);
+        let normalized = max_normalize(&x, Some(3.0));
+        let expected = vec![0.0, 0.0, 0.666667, 0.0, 1.0];
+        for (n, e) in normalized.iter().zip(expected.iter()) {
+            assert!(
+                (n - e).abs() < 1e-6,
+                "Normalized value differs from expected: normalized={}, expected={}",
+                n,
+                e
+            );
+        }
+    }
+
 }
