@@ -33,10 +33,10 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
 
     if (msg.type === "DETECTION_RESULT") {
-        resultDisplay.textContent = msg.mood;
+        resultDisplay.textContent = msg.verdict;
         chrome.storage.local.set({
             detectionResult: {
-                mood: msg.mood,
+                verdict: msg.verdict,
                 score: msg.result
             }
         });
@@ -127,8 +127,8 @@ async function restoreResult() {
         const stored = await chrome.storage.local.get("detectionResult");
         const saved = stored.detectionResult;
 
-        if (saved && saved.mood) {
-            resultDisplay.textContent = saved.mood;
+        if (saved && saved.verdict) {
+            resultDisplay.textContent = saved.verdict;
         } else {
             resultDisplay.textContent = "No result yet";
         }
