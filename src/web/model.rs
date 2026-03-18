@@ -150,9 +150,11 @@ mod tests {
             })
             .collect::<Vec<f32>>();
         let prob = run_inference(&pcm_audio, 48_000).expect("Inference failed");
+        let expected = 0.24525314037105825;
         assert!(
-            (0.0..=1.0).contains(&prob),
-            "Expected probability in [0, 1], got {}",
+            (prob - expected).abs() < 1e-6,
+            "Expected={}, got={}",
+            expected,
             prob
         );
     }
