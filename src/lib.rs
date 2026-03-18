@@ -17,6 +17,21 @@ mod tests {
         let mut reader =
             hound::WavReader::open("tests/assets/ai.wav").expect("Failed to open WAV file");
         let spec = reader.spec();
+        assert!(
+            spec.channels == 2,
+            "must have 2 channels, got {} instead",
+            spec.channels
+        );
+        assert!(
+            spec.bits_per_sample == 16,
+            "must be 16-bit audio, got {} bits per sample instead",
+            spec.bits_per_sample
+        );
+        assert!(
+            spec.sample_format == hound::SampleFormat::Int,
+            "must be PCM audio, got {:?} instead",
+            spec.sample_format
+        );
         let samples = reader
             .samples::<i16>()
             .map(|s| s.unwrap() as f32 / i16::MAX as f32)
@@ -34,6 +49,21 @@ mod tests {
         let mut reader =
             hound::WavReader::open("tests/assets/human.wav").expect("Failed to open WAV file");
         let spec = reader.spec();
+        assert!(
+            spec.channels == 2,
+            "must have 2 channels, got {} instead",
+            spec.channels
+        );
+        assert!(
+            spec.bits_per_sample == 16,
+            "must be 16-bit audio, got {} bits per sample instead",
+            spec.bits_per_sample
+        );
+        assert!(
+            spec.sample_format == hound::SampleFormat::Int,
+            "must be PCM audio, got {:?} instead",
+            spec.sample_format
+        );
         let samples = reader
             .samples::<i16>()
             .map(|s| s.unwrap() as f32 / i16::MAX as f32)
