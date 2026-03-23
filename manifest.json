@@ -1,6 +1,6 @@
 {
-  "name": "Tab Audio Recorder",
-  "version": "1.0",
+  "name": "Quicksilver",
+  "version": "1.0 beta",
   "manifest_version": 3,
   "permissions": [
     "tabCapture",
