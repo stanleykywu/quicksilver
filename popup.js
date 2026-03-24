@@ -1,25 +1,40 @@
 const recordButton = document.getElementById("record");
 const cancelButton = document.getElementById("cancel");
 const timerDisplay = document.getElementById("timer");
+const statusLabel = document.getElementById("status-label");
+const pageTitleDisplay = document.getElementById("page-title");
+const pageUrlDisplay = document.getElementById("page-url");
+const resultCard = document.getElementById("result-card");
 const resultDisplay = document.getElementById("result");
+const scoreDisplay = document.getElementById("score");
+const updatedAtDisplay = document.getElementById("updated-at");
 
+const RECORDING_DURATION_MS = 30_000;
+
+let activePage;
 let isRecording = false;
 let countdownInterval;
 let countdownEnd;
 
-restoreState();
-restoreResult();
+initialize();
 
 recordButton.addEventListener("click", async () => {
-    if (isRecording) return;
+    if (isRecording) {
+        return;
+    }
+
+    if (!activePage?.url) {
+        showEmptyResult("This page cannot be analyzed", "Open a standard web page to record tab audio.");
+        return;
+    }
 
     try {
-        resultDisplay.textContent = "Listening...";
+        setPendingResultState();
         await chrome.runtime.sendMessage({ type: "START_RECORDING" });
-        enterRecordingState();
     } catch (err) {
         console.error("Failed to start recording", err);
-        exitRecordingState();
+        renderIdleState();
+        await renderSavedResult();
     }
 });
 
@@ -28,43 +43,113 @@ cancelButton.addEventListener("click", () => {
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "RECORDING_FINISHED") {
-        exitRecordingState();
+    if (msg.type === "UI_RECORDING_FINISHED") {
+        renderIdleState();
+        renderSavedResult();
     }
 
-    if (msg.type === "DETECTION_RESULT") {
-        resultDisplay.textContent = msg.verdict;
-        chrome.storage.local.set({
-            detectionResult: {
-                verdict: msg.verdict,
-                score: msg.result
-            }
-        });
+    if (msg.type === "UI_RECORDING_STATE_UPDATED") {
+        applyRecordingState(msg.recordingState);
+    }
+
+    if (msg.type === "UI_DETECTION_SAVED") {
+        renderSavedResult();
+    }
+
+    if (msg.type === "UI_DETECTION_ERROR") {
+        if (!isRecording) {
+            renderSavedResult();
+        }
     }
 });
 
-function enterRecordingState() {
-    isRecording = true;
-    recordButton.disabled = true;
-    cancelButton.disabled = false;
-    startCountdown(Date.now() + 30_000);
-    persistState();
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") {
+        return;
+    }
+
+    if (changes.recordingState) {
+        applyRecordingState(changes.recordingState.newValue || null);
+    }
+
+    if (changes.detectionsByUrl) {
+        renderSavedResult();
+    }
+});
+
+async function initialize() {
+    await loadActiveTab();
+    await restoreState();
+    await renderSavedResult();
 }
 
-function exitRecordingState() {
+async function loadActiveTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const normalizedUrl = normalizePageUrl(tab?.url || "");
+
+    activePage = {
+        title: tab?.title || "Unknown page",
+        url: normalizedUrl
+    };
+
+    pageTitleDisplay.textContent = activePage.title;
+    pageUrlDisplay.textContent = activePage.url || "URL unavailable";
+    recordButton.disabled = !activePage.url;
+}
+
+async function restoreState() {
+    try {
+        const stored = await chrome.storage.local.get("recordingState");
+        applyRecordingState(stored.recordingState || null);
+    } catch (err) {
+        console.error("Failed to restore state", err);
+        renderIdleState();
+    }
+}
+
+function applyRecordingState(state) {
+    if (!state || !state.isRecording || !state.countdownEnd) {
+        renderIdleState();
+        return;
+    }
+
+    const remaining = state.countdownEnd - Date.now();
+    if (remaining <= 0) {
+        renderIdleState();
+        return;
+    }
+
+    isRecording = true;
+    recordButton.disabled = true;
+    cancelButton.disabled = state.status === "stopping";
+    statusLabel.textContent = state.status === "stopping" ? "Stopping..." : "Listening...";
+    startCountdown(state.countdownEnd);
+}
+
+function renderIdleState() {
     isRecording = false;
     recordButton.disabled = false;
     cancelButton.disabled = true;
+    statusLabel.textContent = "Ready to record";
     stopCountdown();
-    setTimerDisplay(30_000);
-    clearState();
+    setTimerDisplay(RECORDING_DURATION_MS);
+}
+
+function setPendingResultState() {
+    statusLabel.textContent = "Starting capture...";
+    resultCard.classList.remove("empty");
+    resultDisplay.textContent = "Listening...";
+    scoreDisplay.textContent = "A saved result will appear after the 30 second sample.";
+    updatedAtDisplay.textContent = "";
 }
 
 function requestCancel(reason) {
-    if (!isRecording) return;
+    if (!isRecording) {
+        return;
+    }
+
     cancelButton.disabled = true;
-    stopCountdown();
-    persistState();
+    statusLabel.textContent = "Stopping...";
     chrome.runtime.sendMessage({ type: "STOP_RECORDING", reason }).catch((err) => {
         console.error("Failed to cancel recording", err);
     });
@@ -73,6 +158,11 @@ function requestCancel(reason) {
 function startCountdown(endTime) {
     countdownEnd = endTime;
     setTimerDisplay(countdownEnd - Date.now());
+
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+    }
+
     countdownInterval = setInterval(() => {
         const remaining = Math.max(0, countdownEnd - Date.now());
         setTimerDisplay(remaining);
@@ -96,60 +186,50 @@ function setTimerDisplay(msRemaining) {
     timerDisplay.textContent = `${minutes}:${seconds}`;
 }
 
-async function restoreState() {
+async function renderSavedResult() {
+    if (!activePage?.url) {
+        showEmptyResult("No saved result for this page", "");
+        return;
+    }
+
     try {
-        const stored = await chrome.storage.local.get("recordingState");
-        const state = stored.recordingState;
-        if (!state || !state.isRecording || !state.countdownEnd) {
-            setTimerDisplay(30_000);
+        const stored = await chrome.storage.local.get("detectionsByUrl");
+        const detection = stored.detectionsByUrl?.[activePage.url];
+
+        if (!detection) {
+            showEmptyResult("No saved result for this page", "");
             return;
         }
 
-        const remaining = state.countdownEnd - Date.now();
-        if (remaining <= 0) {
-            clearState();
-            setTimerDisplay(30_000);
-            return;
-        }
-
-        isRecording = true;
-        recordButton.disabled = true;
-        cancelButton.disabled = false;
-        startCountdown(state.countdownEnd);
+        resultCard.classList.remove("empty");
+        resultDisplay.textContent = detection.verdict;
+        scoreDisplay.textContent = `AI probability: ${formatScore(detection.score)}`;
+        updatedAtDisplay.textContent = `Last updated: ${formatTimestamp(detection.updatedAt)}`;
     } catch (err) {
-        console.error("Failed to restore state", err);
-        setTimerDisplay(30_000);
+        console.error("Failed to restore saved result", err);
+        showEmptyResult("No saved result for this page", "");
     }
 }
 
-async function restoreResult() {
-    try {
-        const stored = await chrome.storage.local.get("detectionResult");
-        const saved = stored.detectionResult;
-
-        if (saved && saved.verdict) {
-            resultDisplay.textContent = saved.verdict;
-        } else {
-            resultDisplay.textContent = "No result yet";
-        }
-    } catch (err) {
-        console.error("Failed to restore result", err);
-        resultDisplay.textContent = "No result yet";
-    }
+function showEmptyResult(message, meta) {
+    resultCard.classList.add("empty");
+    resultDisplay.textContent = message;
+    scoreDisplay.textContent = meta;
+    updatedAtDisplay.textContent = "";
 }
 
-function persistState() {
-    try {
-        chrome.storage.local.set({ recordingState: { isRecording, countdownEnd } });
-    } catch (err) {
-        console.error("Failed to persist state", err);
+function formatScore(score) {
+    if (typeof score !== "number" || Number.isNaN(score)) {
+        return "Unavailable";
     }
+
+    return `${(score * 100).toFixed(1)}%`;
 }
 
-function clearState() {
-    try {
-        chrome.storage.local.remove("recordingState");
-    } catch (err) {
-        console.error("Failed to clear state", err);
+function formatTimestamp(timestamp) {
+    if (!timestamp) {
+        return "Unknown";
     }
+
+    return new Date(timestamp).toLocaleString();
 }
