@@ -374,7 +374,3 @@ function flattenPcmChunks(chunks) {
 
     return flattened;
 }
-
-function isCurrentRun(runId) {
-    return runId === currentRunId && Boolean(currentSession);
-}
