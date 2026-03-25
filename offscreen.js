@@ -67,7 +67,6 @@ async function startCapture(session, streamId) {
     try {
         await persistSession();
         await notifyStateChanged();
-        await wasmRuntimePromise;
 
         currentStream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -125,15 +124,16 @@ async function cancelCapture(sessionId, reason) {
 }
 
 async function setupAudioGraph(stream) {
-    audioContext = new AudioContext();
+    // Create a monitor to play back the audio while capturing
+    const monitorAudio = new Audio();
+    monitorAudio.srcObject = stream;
+    monitorAudio.play();
+
+    audioContext = new AudioContext(
+        {"latencyHint": "interactive"}
+    );
     sampleRate = audioContext.sampleRate;
-
     sourceNode = audioContext.createMediaStreamSource(stream);
-
-    monitorGainNode = audioContext.createGain();
-    monitorGainNode.gain.value = 1;
-    sourceNode.connect(monitorGainNode);
-    monitorGainNode.connect(audioContext.destination);
 
     await audioContext.audioWorklet.addModule("processor.js");
 
@@ -207,6 +207,7 @@ async function finalizeCapture(reason) {
 }
 
 async function completeInference(sessionSnapshot, flattenedPcm) {
+    await wasmRuntimePromise;
     if (!runInference) {
         throw new Error("WASM runtime is not available.");
     }
