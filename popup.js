@@ -3,11 +3,8 @@ const cancelButton = document.getElementById("cancel");
 const timerDisplay = document.getElementById("timer");
 const statusLabel = document.getElementById("status-label");
 const pageTitleDisplay = document.getElementById("page-title");
-const pageUrlDisplay = document.getElementById("page-url");
-const resultCard = document.getElementById("result-card");
-const resultDisplay = document.getElementById("result");
-const scoreDisplay = document.getElementById("score");
-const updatedAtDisplay = document.getElementById("updated-at");
+const resultsList = document.getElementById("results-list");
+const resultsEmpty = document.getElementById("results-empty");
 
 const RECORDING_DURATION_MS = 30_000;
 
@@ -34,7 +31,7 @@ recordButton.addEventListener("click", async () => {
     } catch (err) {
         console.error("Failed to start recording", err);
         renderIdleState();
-        await renderSavedResult();
+        await renderResultsPanel();
     }
 });
 
@@ -45,7 +42,7 @@ cancelButton.addEventListener("click", () => {
 chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "UI_RECORDING_FINISHED") {
         renderIdleState();
-        renderSavedResult();
+        renderResultsPanel();
     }
 
     if (msg.type === "UI_RECORDING_STATE_UPDATED") {
@@ -53,12 +50,12 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
 
     if (msg.type === "UI_DETECTION_SAVED") {
-        renderSavedResult();
+        renderResultsPanel();
     }
 
     if (msg.type === "UI_DETECTION_ERROR") {
         if (!isRecording) {
-            renderSavedResult();
+            renderResultsPanel();
         }
     }
 });
@@ -73,14 +70,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     }
 
     if (changes.detectionsByUrl) {
-        renderSavedResult();
+        renderResultsPanel();
     }
 });
 
 async function initialize() {
     await loadActiveTab();
     await restoreState();
-    await renderSavedResult();
+    await renderResultsPanel();
 }
 
 async function loadActiveTab() {
@@ -93,7 +90,6 @@ async function loadActiveTab() {
     };
 
     pageTitleDisplay.textContent = activePage.title;
-    pageUrlDisplay.textContent = activePage.url || "URL unavailable";
     recordButton.disabled = !activePage.url;
 }
 
@@ -137,10 +133,18 @@ function renderIdleState() {
 
 function setPendingResultState() {
     statusLabel.textContent = "Starting capture...";
-    resultCard.classList.remove("empty");
-    resultDisplay.textContent = "Listening...";
-    scoreDisplay.textContent = "A saved result will appear after the 30 second sample.";
-    updatedAtDisplay.textContent = "";
+
+    if (!activePage?.url) {
+        return;
+    }
+
+    renderResultItem({
+        title: activePage.title,
+        url: activePage.url,
+        status: "Listening...",
+        meta: "A saved result will appear after the 30 second sample.",
+        pending: true
+    });
 }
 
 function requestCancel(reason) {
@@ -186,9 +190,28 @@ function setTimerDisplay(msRemaining) {
     timerDisplay.textContent = `${minutes}:${seconds}`;
 }
 
+async function renderResultsPanel() {
+    const stored = await chrome.storage.local.get("recordingState");
+    const recordingState = stored.recordingState || null;
+
+    if (recordingState?.isRecording && recordingState.url) {
+        renderResultItem({
+            title: recordingState.title,
+            url: recordingState.url,
+            status: recordingState.status === "stopping" ? "Stopping..." : "Listening...",
+            metaLine1: "A saved result will appear after the 30 second sample.",
+            metaLine2: "",
+            pending: true
+        });
+        return;
+    }
+
+    await renderSavedResult();
+}
+
 async function renderSavedResult() {
     if (!activePage?.url) {
-        showEmptyResult("No saved result for this page", "");
+        showEmptyResult("No saved result for this page");
         return;
     }
 
@@ -197,25 +220,45 @@ async function renderSavedResult() {
         const detection = stored.detectionsByUrl?.[activePage.url];
 
         if (!detection) {
-            showEmptyResult("No saved result for this page", "");
+            showEmptyResult("No saved result for this page");
             return;
         }
 
-        resultCard.classList.remove("empty");
-        resultDisplay.textContent = detection.verdict;
-        scoreDisplay.textContent = `AI probability: ${formatScore(detection.score)}`;
-        updatedAtDisplay.textContent = `Last updated: ${formatTimestamp(detection.updatedAt)}`;
+        renderResultItem({
+            title: detection.title || activePage.title,
+            url: detection.url || activePage.url,
+            status: detection.verdict || "Saved result",
+            meta: `AI probability: ${formatScore(detection.score)}\nLast updated: ${formatTimestamp(detection.updatedAt)}`,
+            pending: false
+        });
     } catch (err) {
         console.error("Failed to restore saved result", err);
-        showEmptyResult("No saved result for this page", "");
+        showEmptyResult("No saved result for this page");
     }
 }
 
-function showEmptyResult(message, meta) {
-    resultCard.classList.add("empty");
-    resultDisplay.textContent = message;
-    scoreDisplay.textContent = meta;
-    updatedAtDisplay.textContent = "";
+function showEmptyResult(message) {
+    resultsList.innerHTML = `<div id="results-empty" class="results-empty">${message}</div>`;
+}
+
+function renderResultItem({ title, url, status, meta, pending }) {
+    resultsList.innerHTML = `
+        <div class="result-item${pending ? " pending" : ""}">
+            <div class="result-item-title">${escapeHtml(title || "Untitled page")}</div>
+            <div class="result-item-url">${escapeHtml(url || "")}</div>
+            <div class="result-item-status">${escapeHtml(status || "")}</div>
+            <div class="result-item-meta">${escapeHtml(meta || "")}</div>
+        </div>
+    `;
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
 }
 
 function formatScore(score) {

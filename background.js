@@ -100,16 +100,17 @@ async function handleStopRecording(reason) {
 }
 
 async function handleDetectionResult(msg) {
-    if (!currentSession?.url) {
+    const session = currentSession;
+    if (!session?.url) {
         return;
     }
 
     const stored = await chrome.storage.local.get("detectionsByUrl");
     const detectionsByUrl = stored.detectionsByUrl || {};
 
-    detectionsByUrl[currentSession.url] = {
-        url: currentSession.url,
-        title: currentSession.title,
+    detectionsByUrl[session.url] = {
+        url: session.url,
+        title: session.title,
         score: msg.score,
         verdict: msg.verdict,
         sampleRate: msg.sampleRate,
@@ -120,7 +121,7 @@ async function handleDetectionResult(msg) {
 
     broadcast({
         type: "UI_DETECTION_SAVED",
-        url: currentSession.url
+        url: session.url
     });
 }
 
@@ -195,5 +196,5 @@ async function getRecordingState() {
 }
 
 function broadcast(message) {
-    chrome.runtime.sendMessage(message).catch(() => {});
+    chrome.runtime.sendMessage(message).catch(() => { });
 }
