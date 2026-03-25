@@ -17,7 +17,6 @@ let workletSinkNode = null;
 let currentStream = null;
 let stopTimeoutId = null;
 let currentSession = null;
-let currentRunId = 0;
 let isFinalizing = false;
 let pendingStopReason = null;
 let pcmChunks = [];
@@ -51,7 +50,6 @@ async function startCapture(session, streamId) {
         return;
     }
 
-    const runId = ++currentRunId;
     pendingStopReason = null;
     pcmChunks = [];
     sampleRate = null;
@@ -71,25 +69,6 @@ async function startCapture(session, streamId) {
         await notifyStateChanged();
         await wasmRuntimePromise;
 
-        if (!isCurrentRun(runId)) {
-            return;
-        }
-
-        if (pendingStopReason) {
-            await finalizeCapture(pendingStopReason);
-            return;
-        }
-
-        if (!isCurrentRun(runId)) {
-            await cleanupAudioResources();
-            return;
-        }
-
-        if (pendingStopReason) {
-            await finalizeCapture(pendingStopReason);
-            return;
-        }
-
         currentStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 mandatory: {
@@ -101,16 +80,6 @@ async function startCapture(session, streamId) {
         });
 
         await setupAudioGraph(currentStream);
-
-        if (!isCurrentRun(runId)) {
-            await cleanupAudioResources();
-            return;
-        }
-
-        if (pendingStopReason) {
-            await finalizeCapture(pendingStopReason);
-            return;
-        }
 
         currentSession = {
             ...currentSession,
@@ -125,7 +94,7 @@ async function startCapture(session, streamId) {
         }, RECORDING_DURATION_MS);
 
         if (pendingStopReason) {
-            await finalizeCapture(pendingStopReason);
+            await cancelCapture(session.sessionId, pendingStopReason);
         }
     } catch (error) {
         await failSession("capture_start", error);
@@ -137,9 +106,13 @@ async function cancelCapture(sessionId, reason) {
         return;
     }
 
-    pendingStopReason = reason;
+    // don't cancel if we're still initializing
+    // queue it to be handled right after initialization completes
+    if (currentSession.status === CAPTURE_STATUS.INITIALIZING) {
+        pendingStopReason = reason;
+    }
 
-    if (currentSession.status !== CAPTURE_STATUS.CANCELING) {
+    if (currentSession.status == CAPTURE_STATUS.CAPTURING) {
         currentSession = {
             ...currentSession,
             status: CAPTURE_STATUS.CANCELING,
@@ -147,9 +120,6 @@ async function cancelCapture(sessionId, reason) {
         };
         await persistSession();
         await notifyStateChanged();
-    }
-
-    if (audioContext || currentStream) {
         await finalizeCapture(reason);
     }
 }

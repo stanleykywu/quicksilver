@@ -6,10 +6,8 @@ import {
     RECORDING_DURATION_MS
 } from "./constants.js";
 import {
-    clearActiveCaptureSession,
     getActiveCaptureSession,
-    getLatestDetectionForUrl,
-    setActiveCaptureSession
+    getLatestDetectionForUrl
 } from "./storage.js";
 
 const recordButton = document.getElementById("record");
@@ -23,6 +21,7 @@ let activePage = null;
 let activeCaptureSession = null;
 let countdownInterval = null;
 let offscreenCreationPromise = null;
+let hasLiveOffscreenSession = false;
 
 recordButton.addEventListener("click", () => {
     void startCapture();
@@ -60,10 +59,8 @@ async function startCapture() {
     const session = createCaptureSession(activePage);
 
     try {
-        activeCaptureSession = session;
-        await setActiveCaptureSession(session);
         applyCaptureState(session);
-        await renderResultsPanel();
+        await renderResultsPanel(session);
 
         await ensureOffscreenDocument();
         const streamId = await chrome.tabCapture.getMediaStreamId({
@@ -77,8 +74,6 @@ async function startCapture() {
         });
     } catch (error) {
         console.error("Failed to start capture", error);
-        await clearActiveCaptureSession();
-        activeCaptureSession = null;
         applyCaptureState(null);
         await closeOffscreenDocumentIfPresent();
         await renderResultsPanel();
@@ -98,7 +93,6 @@ async function cancelCapture() {
 
     try {
         activeCaptureSession = cancelingSession;
-        await setActiveCaptureSession(cancelingSession);
         applyCaptureState(cancelingSession);
 
         await chrome.runtime.sendMessage({
@@ -137,6 +131,7 @@ async function handleRuntimeMessage(message) {
     }
 
     if (message.type === MESSAGE_TYPE.CAPTURE_FINISHED) {
+        activeCaptureSession = null;
         await closeOffscreenDocumentIfPresent();
         await restoreFromPersistence();
         await renderResultsPanel();
@@ -162,8 +157,9 @@ async function reconcileRuntimeState() {
         hasOffscreenDocument()
     ]);
 
+    hasLiveOffscreenSession = Boolean(persistedSession && offscreenExists);
+
     if (persistedSession && !offscreenExists) {
-        await clearActiveCaptureSession();
         return;
     }
 
@@ -172,9 +168,11 @@ async function reconcileRuntimeState() {
     }
 }
 
-async function restoreFromPersistence() {
-    activeCaptureSession = await getActiveCaptureSession();
-    applyCaptureState(activeCaptureSession);
+async function restoreFromPersistence(fallbackSession = null) {
+    activeCaptureSession = hasLiveOffscreenSession
+        ? await getActiveCaptureSession()
+        : null;
+    applyCaptureState(activeCaptureSession || fallbackSession);
 }
 
 function applyCaptureState(session) {
@@ -222,9 +220,11 @@ function renderIdleState() {
     setTimerDisplay(RECORDING_DURATION_MS);
 }
 
-async function renderResultsPanel() {
-    if (activeCaptureSession) {
-        renderPendingResult(activeCaptureSession);
+async function renderResultsPanel(fallbackSession = null) {
+    const visibleSession = activeCaptureSession || fallbackSession;
+
+    if (visibleSession) {
+        renderPendingResult(visibleSession);
         return;
     }
 
