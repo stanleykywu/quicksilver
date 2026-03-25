@@ -13,9 +13,9 @@ import {
 const recordButton = document.getElementById("record");
 const cancelButton = document.getElementById("cancel");
 const timerDisplay = document.getElementById("timer");
-const statusLabel = document.getElementById("status-label");
-const pageTitleDisplay = document.getElementById("page-title");
 const resultsList = document.getElementById("results-list");
+const timerContainer = document.getElementById("timer-container");
+const progressFill = document.getElementById("progress-fill");
 
 let activePage = null;
 let activeCaptureSession = null;
@@ -147,8 +147,6 @@ async function loadActiveTab() {
         title: tab?.title || "Unknown page",
         url: normalizedUrl
     };
-
-    pageTitleDisplay.textContent = activePage.title;
 }
 
 async function reconcileRuntimeState() {
@@ -181,6 +179,8 @@ function applyCaptureState(session) {
         return;
     }
 
+    timerContainer.classList.remove("hidden");
+
     const status = session.status;
     const isCancelable =
         status === CAPTURE_STATUS.INITIALIZING ||
@@ -190,34 +190,31 @@ function applyCaptureState(session) {
     cancelButton.disabled = !isCancelable;
 
     if (status === CAPTURE_STATUS.INITIALIZING) {
-        statusLabel.textContent = "Starting capture...";
         startCountdown(session.deadlineAt);
         return;
     }
 
     if (status === CAPTURE_STATUS.CANCELING) {
-        statusLabel.textContent = "Stopping...";
         startCountdown(session.deadlineAt);
         return;
     }
 
     if (status === CAPTURE_STATUS.INFERRING) {
-        statusLabel.textContent = "Analyzing...";
         stopCountdown();
         setTimerDisplay(0);
         return;
     }
 
-    statusLabel.textContent = "Listening...";
     startCountdown(session.deadlineAt);
 }
 
 function renderIdleState() {
     recordButton.disabled = !activePage?.url;
     cancelButton.disabled = true;
-    statusLabel.textContent = "Ready to record";
+    timerContainer.classList.add("hidden");
     stopCountdown();
     setTimerDisplay(RECORDING_DURATION_MS);
+    setProgress(0);
 }
 
 async function renderResultsPanel(fallbackSession = null) {
@@ -244,8 +241,8 @@ async function renderResultsPanel(fallbackSession = null) {
         renderResultItem({
             title: detection.title || activePage.title,
             url: detection.url || activePage.url,
-            status: detection.verdict || "Saved result",
-            meta: `AI probability: ${formatScore(detection.score)}\nLast updated: ${formatTimestamp(detection.completedAt)}`,
+            verdict: detection.verdict || "Saved result",
+            probability: `AI probability: ${formatScore(detection.score)}`,
             pending: false
         });
     } catch (error) {
@@ -258,7 +255,7 @@ function renderPendingResult(session) {
     renderResultItem({
         title: session.tabTitle,
         url: session.normalizedUrl,
-        status: getPendingStatusLabel(session.status),
+        verdict: getPendingStatusLabel(session.status),
         meta: "A saved result will appear after the 30 second sample.",
         pending: true
     });
@@ -277,7 +274,7 @@ function getPendingStatusLabel(status) {
         return "Analyzing...";
     }
 
-    return "Listening...";
+    return "Analyzing...";
 }
 
 function startCountdown(deadlineAt) {
@@ -307,19 +304,47 @@ function stopCountdown() {
 }
 
 function setTimerDisplay(msRemaining) {
-    const totalSeconds = Math.ceil(msRemaining / 1000);
+    const totalDuration = RECORDING_DURATION_MS;
+    const clampedRemaining = Math.max(0, Math.min(msRemaining, totalDuration));
+    const totalSeconds = Math.ceil(clampedRemaining / 1000);
     const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
     const seconds = (totalSeconds % 60).toString().padStart(2, "0");
-    timerDisplay.textContent = `${minutes}:${seconds}`;
+
+    timerDisplay.textContent = `Please wait: ${Number(minutes)}:${seconds}`;
+
+    const elapsedRatio = (totalDuration - clampedRemaining) / totalDuration;
+    setProgress(elapsedRatio * 100);
 }
 
-function renderResultItem({ title, url, status, meta, pending }) {
+function setProgress(percent) {
+    if (!progressFill) {
+        return;
+    }
+
+    const clampedPercent = Math.max(0, Math.min(percent, 100));
+    progressFill.style.width = `${clampedPercent}%`;
+}
+
+function renderResultItem({ title, url, verdict, probability, meta, pending }) {
+    const verdictClass = pending
+        ? "pending"
+        : verdict?.toLowerCase().includes("unlikely")
+            ? "unlikely"
+            : verdict?.toLowerCase().includes("likely")
+                ? "likely"
+                : "";
+
     resultsList.innerHTML = `
-        <div class="result-item${pending ? " pending" : ""}">
+        <div class="result-item ${verdictClass}">
+            <div class="result-item-verdict">${escapeHtml(verdict || "")}</div>
+            ${probability ? `<div class="result-item-probability">${escapeHtml(probability)}</div>` : ""}
             <div class="result-item-title">${escapeHtml(title || "Untitled page")}</div>
-            <div class="result-item-url">${escapeHtml(url || "")}</div>
-            <div class="result-item-status">${escapeHtml(status || "")}</div>
-            <div class="result-item-meta">${escapeHtml(meta || "")}</div>
+            <div class="result-item-url">
+                <a href="${escapeHtml(url || "#")}" target="_blank" rel="noopener noreferrer">
+                    ${escapeHtml(url || "")}
+                </a>
+            </div>
+            ${meta ? `<div class="result-item-meta">${escapeHtml(meta)}</div>` : ""}
         </div>
     `;
 }
@@ -412,12 +437,4 @@ function formatScore(score) {
     }
 
     return `${(score * 100).toFixed(1)}%`;
-}
-
-function formatTimestamp(timestamp) {
-    if (!timestamp) {
-        return "Unknown";
-    }
-
-    return new Date(timestamp).toLocaleString();
 }
