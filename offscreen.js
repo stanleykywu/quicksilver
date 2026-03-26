@@ -1,156 +1,376 @@
-let audioContext;
-let source;
-let workletNode;
-let pcmData = [];
-let currentStream;
-let recordedSampleRate; // Store the actual rate
-let stopTimeoutId;
-let stopping = false;
-let monitorGain;
-let detector; // function exported from WASM module
+import {
+    CAPTURE_STATUS,
+    MESSAGE_TYPE,
+    RECORDING_DURATION_MS
+} from "./constants.js";
+import {
+    appendDetectionHistory,
+    clearActiveCaptureSession,
+    setActiveCaptureSession
+} from "./storage.js";
 
-const wasmReady = initWasm();
+let audioContext = null;
+let sourceNode = null;
+let monitorGainNode = null;
+let workletNode = null;
+let workletSinkNode = null;
+let currentStream = null;
+let stopTimeoutId = null;
+let currentSession = null;
+let isFinalizing = false;
+let pendingStopReason = null;
+let pcmChunks = [];
+let sampleRate = null;
+let runInference = null;
 
-async function initWasm() {
-    try {
-        const wasmModule = await import('./pkg/ai_music_browser_detector.js');
-        await wasmModule.default();
-        detector = wasmModule.run_inference;
-    } catch (err) {
-        console.error('Failed to initialize WASM module', err);
+const wasmRuntimePromise = initializeWasm();
+
+chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === MESSAGE_TYPE.START_CAPTURE) {
+        void startCapture(message.session, message.streamId);
     }
+
+    if (message?.type === MESSAGE_TYPE.CANCEL_CAPTURE) {
+        void cancelCapture(message.sessionId, message.reason || "user_cancel");
+    }
+});
+
+async function initializeWasm() {
+    const wasmModule = await import("./pkg/ai_music_browser_detector.js");
+    await wasmModule.default();
+    runInference = wasmModule.run_inference;
 }
 
-chrome.runtime.onMessage.addListener(async (msg) => {
-    if (msg.type === "CAPTURE_STREAM") {
+async function startCapture(session, streamId) {
+    if (!session || !streamId) {
+        return;
+    }
+
+    if (currentSession) {
+        return;
+    }
+
+    pendingStopReason = null;
+    pcmChunks = [];
+    sampleRate = null;
+    isFinalizing = false;
+
+    currentSession = {
+        ...session,
+        status: CAPTURE_STATUS.INITIALIZING,
+        capturedChunkCount: 0,
+        capturedFrameCount: 0,
+        cancelReason: null,
+        error: null
+    };
+
+    try {
+        await persistSession();
+        await notifyStateChanged();
+
         currentStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 mandatory: {
                     chromeMediaSource: "tab",
-                    chromeMediaSourceId: msg.streamId
+                    chromeMediaSourceId: streamId
                 }
             },
             video: false
         });
-        startRecording(currentStream);
+
+        await setupAudioGraph(currentStream);
+
+        currentSession = {
+            ...currentSession,
+            status: CAPTURE_STATUS.CAPTURING,
+            sampleRate
+        };
+        await persistSession();
+        await notifyStateChanged();
+
+        stopTimeoutId = setTimeout(() => {
+            void finalizeCapture("timeout");
+        }, RECORDING_DURATION_MS);
+
+        if (pendingStopReason) {
+            await cancelCapture(session.sessionId, pendingStopReason);
+        }
+    } catch (error) {
+        await failSession("capture_start", error);
     }
-
-    if (msg.type === "STOP_RECORDING") {
-        stopRecording(msg.reason || "cancelled");
-    }
-});
-
-async function startRecording(stream) {
-    audioContext = new AudioContext();
-    // Capture the REAL sample rate of the hardware/stream
-    recordedSampleRate = audioContext.sampleRate;
-
-    await audioContext.audioWorklet.addModule('processor.js');
-
-    source = audioContext.createMediaStreamSource(stream);
-
-    // Keep audio audible in the tab by routing it
-    // through the offscreen context to the output
-    monitorGain = audioContext.createGain();
-    monitorGain.gain.value = 1;
-    source.connect(monitorGain);
-    monitorGain.connect(audioContext.destination);
-
-    workletNode = new AudioWorkletNode(audioContext, 'pcm-processor', {
-        outputChannelCount: [2]
-    });
-
-    workletNode.port.onmessage = (event) => {
-        pcmData.push(event.data);
-    };
-
-    source.connect(workletNode);
-    workletNode.connect(audioContext.destination);
-
-    stopTimeoutId = setTimeout(() => stopRecording("timeout"), 30000);
 }
 
-async function stopRecording(reason = "finished") {
-    if (stopping) return; // If we're already stopping, don't run this again.
-    stopping = true;
-
-    if (stopTimeoutId) {
-        clearTimeout(stopTimeoutId);
-        stopTimeoutId = undefined;
-    }
-
-    // Regardless of the reason, we always sent a "RECORDING_FINISHED"
-    // message to background.js at the end, so it can clean up.
-    if (!workletNode && !currentStream && !audioContext) {
-        stopping = false; // Because we finished stopping (i.e., did nothing)
-        chrome.runtime.sendMessage({ type: "RECORDING_FINISHED", reason });
+async function cancelCapture(sessionId, reason) {
+    if (!currentSession || currentSession.sessionId !== sessionId) {
         return;
     }
 
+    // don't cancel if we're still initializing
+    // queue it to be handled right after initialization completes
+    if (currentSession.status === CAPTURE_STATUS.INITIALIZING) {
+        pendingStopReason = reason;
+    }
+
+    if (currentSession.status == CAPTURE_STATUS.CAPTURING) {
+        currentSession = {
+            ...currentSession,
+            status: CAPTURE_STATUS.CANCELING,
+            cancelReason: reason
+        };
+        await persistSession();
+        await notifyStateChanged();
+        await finalizeCapture(reason);
+    }
+}
+
+async function setupAudioGraph(stream) {
+    // Create a monitor to play back the audio while capturing
+    const monitorAudio = new Audio();
+    monitorAudio.srcObject = stream;
+    monitorAudio.play();
+
+    audioContext = new AudioContext(
+        {"latencyHint": "interactive"}
+    );
+    sampleRate = audioContext.sampleRate;
+    sourceNode = audioContext.createMediaStreamSource(stream);
+
+    await audioContext.audioWorklet.addModule("processor.js");
+
+    workletNode = new AudioWorkletNode(audioContext, "pcm-processor", {
+        outputChannelCount: [2]
+    });
+    workletNode.port.onmessage = handleWorkletMessage;
+
+    workletSinkNode = audioContext.createGain();
+    workletSinkNode.gain.value = 0;
+
+    sourceNode.connect(workletNode);
+    workletNode.connect(workletSinkNode);
+    workletSinkNode.connect(audioContext.destination);
+}
+
+function handleWorkletMessage(event) {
+    if (!currentSession || currentSession.status === CAPTURE_STATUS.CANCELING) {
+        return;
+    }
+
+    const chunk = event.data;
+    if (!(chunk instanceof Float32Array) || chunk.length === 0) {
+        return;
+    }
+
+    pcmChunks.push(chunk);
+    currentSession = {
+        ...currentSession,
+        capturedChunkCount: currentSession.capturedChunkCount + 1,
+        capturedFrameCount: currentSession.capturedFrameCount + chunk.length / 2
+    };
+}
+
+async function finalizeCapture(reason) {
+    if (!currentSession || isFinalizing) {
+        return;
+    }
+
+    isFinalizing = true;
+    clearStopTimeout();
+
+    const shouldRunInference = reason === "timeout";
+    const sessionSnapshot = currentSession;
+    const flattenedPcm = shouldRunInference ? flattenPcmChunks(pcmChunks) : new Float32Array(0);
+
+    try {
+        if (shouldRunInference) {
+            currentSession = {
+                ...currentSession,
+                status: CAPTURE_STATUS.INFERRING
+            };
+            await persistSession();
+            await notifyStateChanged();
+        }
+
+        await cleanupAudioResources();
+
+        if (shouldRunInference) {
+            await completeInference(sessionSnapshot, flattenedPcm);
+        }
+
+        await resetSessionState();
+        await notifyCaptureFinished(sessionSnapshot.sessionId, reason);
+    } catch (error) {
+        await failSession("finalize_capture", error);
+    } finally {
+        discardCapturedAudio();
+        isFinalizing = false;
+    }
+}
+
+async function completeInference(sessionSnapshot, flattenedPcm) {
+    await wasmRuntimePromise;
+    if (!runInference) {
+        throw new Error("WASM runtime is not available.");
+    }
+
+    if (flattenedPcm.length === 0) {
+        throw new Error("No audio samples were captured.");
+    }
+
+    const numericScore = Number(runInference(flattenedPcm, sampleRate));
+    if (!Number.isFinite(numericScore)) {
+        throw new Error("Inference returned an invalid score.");
+    }
+
+    const completedAt = Date.now();
+    const score = numericScore;
+    const verdict = score > 0.5 ? "Likely AI" : "Unlikely AI";
+    const historyEntry = {
+        sessionId: sessionSnapshot.sessionId,
+        normalizedUrl: sessionSnapshot.normalizedUrl,
+        url: sessionSnapshot.tabUrl,
+        title: sessionSnapshot.tabTitle,
+        capturedAt: sessionSnapshot.startedAt,
+        completedAt,
+        score,
+        verdict,
+        sampleRate
+    };
+
+    await appendDetectionHistory(historyEntry);
+    await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPE.DETECTION_COMPLETED,
+        sessionId: sessionSnapshot.sessionId,
+        normalizedUrl: sessionSnapshot.normalizedUrl,
+        score,
+        verdict,
+        sampleRate,
+        capturedAt: sessionSnapshot.startedAt,
+        completedAt
+    }).catch(() => { });
+}
+
+async function failSession(stage, error) {
+    const sessionId = currentSession?.sessionId ?? null;
+    const message = error instanceof Error ? error.message : String(error);
+
+    console.error(`Offscreen failure during ${stage}`, error);
+
+    clearStopTimeout();
+    await cleanupAudioResources().catch(() => { });
+    discardCapturedAudio();
+    await clearActiveCaptureSession().catch(() => { });
+
+    currentSession = null;
+    pendingStopReason = null;
+
+    await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPE.STATE_CHANGED,
+        session: null
+    }).catch(() => { });
+
+    await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPE.DETECTION_FAILED,
+        sessionId,
+        stage,
+        message
+    }).catch(() => { });
+
+    await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPE.CAPTURE_FINISHED,
+        sessionId,
+        reason: "error"
+    }).catch(() => { });
+}
+
+async function persistSession() {
+    if (!currentSession) {
+        return;
+    }
+
+    await setActiveCaptureSession(currentSession);
+}
+
+async function notifyStateChanged() {
+    await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPE.STATE_CHANGED,
+        session: currentSession
+    }).catch(() => { });
+}
+
+async function notifyCaptureFinished(sessionId, reason) {
+    await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPE.STATE_CHANGED,
+        session: null
+    }).catch(() => { });
+
+    await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPE.CAPTURE_FINISHED,
+        sessionId,
+        reason
+    }).catch(() => { });
+}
+
+async function resetSessionState() {
+    await clearActiveCaptureSession();
+    currentSession = null;
+    pendingStopReason = null;
+}
+
+async function cleanupAudioResources() {
     if (workletNode) {
+        workletNode.port.onmessage = null;
         workletNode.disconnect();
     }
 
-    if (source) {
-        source.disconnect();
+    if (workletSinkNode) {
+        workletSinkNode.disconnect();
     }
 
-    if (monitorGain) {
-        monitorGain.disconnect();
+    if (monitorGainNode) {
+        monitorGainNode.disconnect();
+    }
+
+    if (sourceNode) {
+        sourceNode.disconnect();
     }
 
     if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
+        currentStream.getTracks().forEach((track) => track.stop());
     }
 
-    if (audioContext) {
+    if (audioContext && audioContext.state !== "closed") {
         await audioContext.close();
     }
 
-    await wasmReady;
-    const flattened = flattenPCM(pcmData);
-    if (detector && flattened.length > 0 && (reason === "finished" || reason === "timeout")) {
-
-        try {
-            const result = detector(flattened, recordedSampleRate);
-            const verdict = result > 0.5 ? "Likely AI" : "Unlikely AI";
-
-            console.log("WASM detection result:", result);
-            console.log("Detected verdict:", verdict);
-
-            chrome.runtime.sendMessage({
-                type: "DETECTION_RESULT",
-                result,
-                verdict
-            });
-        } catch (err) {
-            console.error("WASM inference failed", {
-                error: err instanceof Error ? err.message : String(err),
-                flattenedLength: flattened.length,
-                reason
-            });
-        }
-    }
-
-    pcmData = [];
-    workletNode = undefined;
-    source = undefined;
-    monitorGain = undefined;
-    audioContext = undefined;
-    currentStream = undefined;
-    recordedSampleRate = undefined;
-    stopping = false;
-
-    chrome.runtime.sendMessage({ type: "RECORDING_FINISHED", reason });
+    audioContext = null;
+    sourceNode = null;
+    monitorGainNode = null;
+    workletNode = null;
+    workletSinkNode = null;
+    currentStream = null;
 }
 
-function flattenPCM(chunks) {
-    let length = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-    let result = new Float32Array(length);
+function discardCapturedAudio() {
+    pcmChunks = [];
+    sampleRate = null;
+}
+
+function clearStopTimeout() {
+    if (stopTimeoutId) {
+        clearTimeout(stopTimeoutId);
+        stopTimeoutId = null;
+    }
+}
+
+function flattenPcmChunks(chunks) {
+    const totalLength = chunks.reduce((length, chunk) => length + chunk.length, 0);
+    const flattened = new Float32Array(totalLength);
     let offset = 0;
-    for (let chunk of chunks) {
-        result.set(chunk, offset);
+
+    for (const chunk of chunks) {
+        flattened.set(chunk, offset);
         offset += chunk.length;
     }
-    return result;
+
+    return flattened;
 }

@@ -6,7 +6,7 @@ We respect and value your privacy. This Privacy Policy describes how the Quicksi
 
 ## Information Collection
 
-Quicksilver collects audio data and tab information (url) only when the user clicks on the "Record Tab" button in the extension. Since the classification model is entirely local on your own machine, Quicksilver does not transmit or sell any data to third parties. Since everything stays local to your machine, Quicksilver does not gather any other information, such as your name, email address, or location.
+Quicksilver collects audio data and tab information (url) only when the user clicks on the "Analyze" button in the extension. Since the classification model is entirely local on your own machine, Quicksilver does not transmit or sell any data to third parties. Since everything stays local to your machine, Quicksilver does not gather any other information, such as your name, email address, or location.
 
 ## Changes to this Privacy Policy
 
