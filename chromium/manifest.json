@@ -2,7 +2,7 @@
   "name": "Quicksilver",
   "version": "1.1",
   "version_name": "1.1 beta",
-  "description": "Allows users to analyze music (audio) detect for AI-generated music using machine learning.",
+  "description": "Allows users to analyze and detect AI-generated music (audio) using machine learning.",
   "manifest_version": 3,
   "permissions": [
     "tabCapture",
