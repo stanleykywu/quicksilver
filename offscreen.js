@@ -216,6 +216,14 @@ async function completeInference(sessionSnapshot, flattenedPcm) {
         throw new Error("No audio samples were captured.");
     }
 
+    let zerosCount = 0;
+    for (const sample of flattenedPcm) {
+        if (sample == 0)
+            zerosCount++;
+    }
+    let zerosFrac = flattenedPcm.length > 0 ? zerosCount / flattenedPcm.length : 0;
+    let hasSufficientAudio = zerosFrac < 0.5;
+
     const numericScore = Number(runInference(flattenedPcm, sampleRate));
     if (!Number.isFinite(numericScore)) {
         throw new Error("Inference returned an invalid score.");
@@ -233,7 +241,8 @@ async function completeInference(sessionSnapshot, flattenedPcm) {
         completedAt,
         score,
         verdict,
-        sampleRate
+        sampleRate,
+        hasSufficientAudio
     };
 
     await appendDetectionHistory(historyEntry);
@@ -244,6 +253,7 @@ async function completeInference(sessionSnapshot, flattenedPcm) {
         score,
         verdict,
         sampleRate,
+        hasSufficientAudio,
         capturedAt: sessionSnapshot.startedAt,
         completedAt
     }).catch(() => { });

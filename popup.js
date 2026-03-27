@@ -243,6 +243,9 @@ async function renderResultsPanel(fallbackSession = null) {
             url: detection.url || activePage.url,
             verdict: detection.verdict || "Saved result",
             probability: `AI probability: ${formatScore(detection.score)}`,
+            warning: detection.hasSufficientAudio === false
+                ? "Over 50% of the analyzed audio was silent. Results are likely unreliable."
+                : "",
             pending: false
         });
     } catch (error) {
@@ -325,7 +328,7 @@ function setProgress(percent) {
     progressFill.style.width = `${clampedPercent}%`;
 }
 
-function renderResultItem({ title, url, verdict, probability, meta, pending }) {
+function renderResultItem({ title, url, verdict, probability, meta, warning, pending }) {
     const verdictClass = pending
         ? "pending"
         : verdict?.toLowerCase().includes("unlikely")
@@ -338,6 +341,7 @@ function renderResultItem({ title, url, verdict, probability, meta, pending }) {
         <div class="result-item ${verdictClass}">
             <div class="result-item-verdict">${escapeHtml(verdict || "")}</div>
             ${probability ? `<div class="result-item-probability">${escapeHtml(probability)}</div>` : ""}
+            ${warning ? `<div class="result-item-warning">${escapeHtml(warning)}</div>` : ""}
             <div class="result-item-title">${escapeHtml(title || "Untitled page")}</div>
             <div class="result-item-url">
                 <a href="${escapeHtml(url || "#")}" target="_blank" rel="noopener noreferrer">
