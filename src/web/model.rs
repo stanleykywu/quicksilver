@@ -56,7 +56,7 @@ impl BinaryLogisticRegression {
 
 /// The model is small enough that it is most performant
 /// to include it directly in the binary.
-static MODEL_BYTES: &[u8] = include_bytes!("../../model/v1.0-2026-03-31/model.cbor");
+static MODEL_BYTES: &[u8] = include_bytes!("../../model/v1.1-2026-08-26/model.cbor");
 /// We use a LazyLock to ensure that the model is only deserialized on
 /// the first inference call, which avoids unnecessary work for repeated calls.
 static MODEL: LazyLock<BinaryLogisticRegression> = LazyLock::new(|| {

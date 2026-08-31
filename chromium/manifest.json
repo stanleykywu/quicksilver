@@ -1,7 +1,7 @@
 {
   "name": "Quicksilver",
-  "version": "1.0.1",
-  "version_name": "1.0.1",
+  "version": "1.1.0",
+  "version_name": "1.1.0",
   "description": "Detect AI-generated music (audio) in browser using machine learning.",
   "manifest_version": 3,
   "permissions": [
