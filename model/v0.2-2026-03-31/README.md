@@ -1,5 +1,5 @@
-# Quicksilver Model v1.0
-_Last updated: April 1st 2026_
+# Quicksilver Model v1.2
+_updated April 1st 2026_
 
 This version of the model heavily scales up training for both AI and non-AI audio, and includes non-music human audio as additional negative class (not AI). 
 
@@ -47,13 +47,13 @@ This version of the model heavily scales up training for both AI and non-AI audi
 # Performance
 
 ### AI
-| Source | Num Samples | Num Correct | TPR | FNR |
+| Source | Num Samples | Num Correct | Precision | FNR |
 |--------|------------:|------------:|----------:|----:|
 | suno | 190578 | 186993 | 98.1189% | 1.8811% |
 | udio | 10000 | 9641 | 96.4100% | 3.5900% |
 
 ### Human
-| Source | Num Samples | Num Correct | TNR | FPR |
+| Source | Num Samples | Num Correct | Precision | FPR |
 |--------|------------:|------------:|----------:|----:|
 | audioset | 301382 | 301347 | 99.9884% | 0.0116% |
 | common_voice_en | 2548 | 2548 | 100.0000% | 0.0000% |
